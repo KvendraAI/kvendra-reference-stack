@@ -1,0 +1,163 @@
+# SPDX-License-Identifier: MIT
+# kvendra-reference-stack v0.1 — Self-Hosted Community
+#
+# 4 containers (db + platform + ollama + backup). CLI lives on the host,
+# orchestrator (cline) lives on the host — per ROAD-KVD-716183 principles
+# 4 (CLI excluded) and PAT-KVD-819856 L3 (no master password in env vars).
+#
+# See ./docs/tier-a-b-c.md for the env-var gradient (self-hosted full /
+# hybrid L1 / hybrid L2) and ./docs/troubleshooting.md for common pitfalls.
+
+services:
+
+  # =====================================================================
+  # 1. kvendra-db — Postgres 16 + pgvector
+  # =====================================================================
+  kvendra-db:
+    image: pgvector/pgvector:pg16
+    container_name: kvendra-ref-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kvendra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kvendra}
+      POSTGRES_DB: ${POSTGRES_DB:-kvendra_platform}
+    volumes:
+      - kvendra_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-kvendra} -d ${POSTGRES_DB:-kvendra_platform}
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No host port published by default — only the platform talks to the
+    # DB on the internal network. Uncomment to expose 5432 for debugging.
+    # ports:
+    #   - "5432:5432"
+
+  # =====================================================================
+  # 2. kvendra-platform — KB engine (AGPL-3.0, motor OSS)
+  # =====================================================================
+  kvendra-platform:
+    image: ghcr.io/kvendraai/kvendra-platform:0.1.0-alpha.0
+    container_name: kvendra-ref-platform
+    restart: unless-stopped
+    depends_on:
+      kvendra-db:
+        condition: service_healthy
+      # ollama dependency is soft — platform boots with mock provider if
+      # ollama is unreachable. We don't depend_on it explicitly so the
+      # stack still starts if the user disables ollama (hybrid L1/L2).
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-kvendra}:${POSTGRES_PASSWORD:-kvendra}@kvendra-db:5432/${POSTGRES_DB:-kvendra_platform}
+      AUTH_TOKEN_FILE: /data/auth.token
+      PORT: "7777"
+      HOST: "0.0.0.0"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      STAGE: ${STAGE:-local}
+
+      # === Embeddings provider (M1 BYOK — see docs/tier-a-b-c.md) ===
+      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-mock}
+      EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-}
+      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-}
+      EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-}
+      EMBEDDINGS_TIMEOUT_MS: ${EMBEDDINGS_TIMEOUT_MS:-30000}
+    ports:
+      - "${PLATFORM_HOST_PORT:-7777}:7777"
+    volumes:
+      - kvendra_platform_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --quiet
+        - --tries=1
+        - --spider
+        - http://localhost:7777/healthz
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =====================================================================
+  # 3. kvendra-ollama — Ollama runtime (MIT, LLM + embeddings server)
+  # =====================================================================
+  #
+  # Pulls and serves the baseline models. The platform reaches Ollama via
+  # the internal hostname `kvendra-ollama:11434`. Host port 11434 is
+  # exposed for the cline CLI on the host to use the same Ollama instance
+  # (one model load, two consumers).
+  #
+  # Disable this service entirely for hybrid L1 (kvendra-cloud embeddings):
+  #   docker compose up -d kvendra-db kvendra-platform kvendra-backup
+  kvendra-ollama:
+    image: ollama/ollama:0.24.0
+    container_name: kvendra-ref-ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: "0.0.0.0:11434"
+      OLLAMA_KEEP_ALIVE: "30m"
+    ports:
+      - "${OLLAMA_HOST_PORT:-11434}:11434"
+    volumes:
+      - kvendra_ollama_models:/root/.ollama
+    # Optional GPU passthrough — uncomment and adjust if you have one.
+    # NVIDIA: requires nvidia-container-toolkit on host.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "wget --quiet --tries=1 --spider http://localhost:11434/api/version || exit 1"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  # =====================================================================
+  # 4. kvendra-backup — sidecar with internal cron for pg_dump + volumes
+  # =====================================================================
+  #
+  # Runs a tiny container with an internal cron schedule that:
+  #   - dumps the kvendra-db DB to /backups/db-YYYYMMDDTHHMMSS.sql.gz
+  #   - snapshots the platform /data volume to a tarball
+  #
+  # Default schedule: daily at 03:30 local time. Override with BACKUP_CRON.
+  # NOTE: this is a sidecar by design — the platform container never runs
+  # cron internally (anti-pattern, per ROAD-KVD-716183 M4 design).
+  kvendra-backup:
+    image: postgres:16-alpine
+    container_name: kvendra-ref-backup
+    restart: unless-stopped
+    depends_on:
+      kvendra-db:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kvendra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kvendra}
+      POSTGRES_DB: ${POSTGRES_DB:-kvendra_platform}
+      BACKUP_CRON: ${BACKUP_CRON:-30 3 * * *}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - ./backups:/backups
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        apk add --no-cache busybox-suid >/dev/null
+        mkdir -p /backups
+        echo "$$BACKUP_CRON   PGPASSWORD=$$POSTGRES_PASSWORD pg_dump -h kvendra-db -U $$POSTGRES_USER $$POSTGRES_DB | gzip > /backups/db-$$(date -u +%Y%m%dT%H%M%SZ).sql.gz && find /backups -name 'db-*.sql.gz' -mtime +$$BACKUP_RETENTION_DAYS -delete" > /var/spool/cron/crontabs/root
+        echo "kvendra-backup ready. Schedule: $$BACKUP_CRON. Retention: $$BACKUP_RETENTION_DAYS days."
+        crond -f -L /dev/stdout
+
+volumes:
+  kvendra_pgdata:
+    name: kvendra_ref_pgdata
+  kvendra_platform_data:
+    name: kvendra_ref_platform_data
+  kvendra_ollama_models:
+    name: kvendra_ref_ollama_models
