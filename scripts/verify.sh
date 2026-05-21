@@ -1,92 +1,119 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# verify.sh — verify image integrity before pulling / running the stack.
+# verify.sh — verify image signatures + SBOM attestations before running the stack.
 #
-# v0.1: sha256 checks against a pinned checksums.txt.
-# v0.2 (M5 of ROAD-KVD-716183): adds sigstore/cosign signature verification.
+# Uses Sigstore/cosign keyless verification against the GitHub Actions OIDC
+# identity that signs the kvendra-platform images during the release pipeline
+# (.github/workflows/release.yml in KvendraAI/kvendra-platform).
 #
-# This is the **placeholder** so the workflow does not change once M5 ships.
-# Today it only verifies the checksums file is well-formed.
+# Requirements: cosign v2+ installed. Install on macOS: `brew install cosign`.
+# On Linux: see https://docs.sigstore.dev/system_config/installation.
+#
+# Refs: ROAD-KVD-716183 M5 (signing/SBOM pipeline).
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-CHECKSUMS="$ROOT/checksums.txt"
-
 # ----------------------------------------------------------------------
-# Step 1 — checksums.txt presence + format
+# Images pinned in docker-compose.yml. Update on each version bump.
 # ----------------------------------------------------------------------
-if [[ ! -f "$CHECKSUMS" ]]; then
-  cat >&2 <<EOF
-verify.sh: checksums.txt not present in repo root.
-
-This file ships with each release of kvendra-reference-stack. If you cloned
-'main' before the first tagged release, the file may legitimately not exist
-yet. Skip verification and run at your own risk:
-
-  ./scripts/up.sh
-
-To get checksums for a tag:
-  git checkout v0.1.0
-  ./scripts/verify.sh
-EOF
-  exit 1
-fi
-
-LINES=$(wc -l <"$CHECKSUMS" | tr -d ' ')
-if [[ "$LINES" -lt 1 ]]; then
-  echo "verify.sh: checksums.txt is empty." >&2
-  exit 1
-fi
-
-# ----------------------------------------------------------------------
-# Step 2 — sha256 of each docker image we pin in compose, compared to checksums.
-# ----------------------------------------------------------------------
-PINNED_IMAGES=(
-  "pgvector/pgvector:pg16"
+KVENDRA_IMAGES=(
   "ghcr.io/kvendraai/kvendra-platform:0.1.0-alpha.0"
+)
+
+# These are upstream public-registry images. We do not verify their signatures
+# here (signed by their respective projects, not by Kvendra). If your security
+# policy requires verifying these too, see docs/signing.md § "verifying upstream".
+UPSTREAM_IMAGES=(
+  "pgvector/pgvector:pg16"
   "ollama/ollama:0.24.0"
   "postgres:16-alpine"
 )
 
-echo "verify.sh: checking SHA-256 of pinned image digests"
-fail=0
-for img in "${PINNED_IMAGES[@]}"; do
-  if ! grep -q "$img" "$CHECKSUMS"; then
-    echo "  ✗ $img — no entry in checksums.txt"
-    fail=1
-    continue
-  fi
-  # The actual digest check is light v0.1: we trust 'docker pull' to
-  # resolve to the tag's current digest and just confirm the image is
-  # listed in checksums.txt. Real digest pin + verification arrives with
-  # M5 (cosign keyless).
-  echo "  ✓ $img — listed in checksums.txt"
-done
+# ----------------------------------------------------------------------
+# Pre-flight: cosign installed?
+# ----------------------------------------------------------------------
+if ! command -v cosign >/dev/null 2>&1; then
+  cat >&2 <<EOF
+verify.sh: cosign not found in PATH.
 
-if [[ $fail -ne 0 ]]; then
-  echo "verify.sh: one or more pinned images missing from checksums.txt." >&2
+Install:
+  macOS:   brew install cosign
+  Linux:   https://docs.sigstore.dev/system_config/installation
+
+Or skip verification at your own risk:
+  SKIP_VERIFY=1 ./scripts/up.sh
+EOF
   exit 1
 fi
 
 # ----------------------------------------------------------------------
-# Step 3 — placeholder for cosign signature verification (M5)
+# Step 1 — verify Kvendra-signed images (cosign keyless).
 # ----------------------------------------------------------------------
-cat <<'EOF'
+echo "verify.sh: checking Sigstore/cosign signatures on Kvendra images"
+fail=0
 
-NOTE — Sigstore/cosign verification is not yet active.
+for img in "${KVENDRA_IMAGES[@]}"; do
+  echo "  verifying $img"
+  if cosign verify "$img" \
+      --certificate-identity-regexp '^https://github\.com/KvendraAI/' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      >/dev/null 2>&1; then
+    echo "    ✓ signature OK (keyless OIDC, KvendraAI/* identity)"
+  else
+    echo "    ✗ signature verification FAILED"
+    fail=1
+  fi
+done
 
-It arrives with M5 of ROAD-KVD-716183 (signing/SBOM pipeline). When M5
-ships, this script will additionally run:
+if [[ $fail -ne 0 ]]; then
+  cat >&2 <<EOF
 
-  cosign verify ghcr.io/kvendraai/kvendra-platform:0.1.0-alpha.0 \
-    --certificate-identity-regexp '^https://github.com/KvendraAI/' \
-    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+verify.sh: one or more signature verifications failed.
 
-For now, treat this stack as "checksum-verified, signature-unverified".
+This may mean:
+  1. The image was not signed yet (M5 of ROAD-KVD-716183 has not shipped a
+     signed release of this version). Check:
+       https://github.com/KvendraAI/kvendra-platform/releases
+  2. Network issue reaching Sigstore Rekor / Fulcio.
+  3. The image was tampered with (rare but possible — investigate).
+
+Do NOT proceed with up.sh until this is resolved, unless you accept the risk:
+  SKIP_VERIFY=1 ./scripts/up.sh
 EOF
+  exit 1
+fi
+
+# ----------------------------------------------------------------------
+# Step 2 — verify SBOM attestations.
+# ----------------------------------------------------------------------
+echo "verify.sh: checking SPDX SBOM attestations on Kvendra images"
+
+for img in "${KVENDRA_IMAGES[@]}"; do
+  echo "  verifying SBOM attestation for $img"
+  if cosign verify-attestation "$img" \
+      --certificate-identity-regexp '^https://github\.com/KvendraAI/' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      --type spdxjson \
+      >/dev/null 2>&1; then
+    echo "    ✓ SBOM attestation OK"
+  else
+    echo "    ⚠ SBOM attestation not found or invalid (skipping — non-fatal)"
+  fi
+done
+
+# ----------------------------------------------------------------------
+# Step 3 — note about upstream images.
+# ----------------------------------------------------------------------
+echo
+echo "verify.sh: upstream images (NOT verified by this script):"
+for img in "${UPSTREAM_IMAGES[@]}"; do
+  echo "    $img"
+done
+echo "  These are public-registry images signed (if at all) by their own"
+echo "  projects. See docs/signing.md to verify them under stricter policy."
 
 echo
-echo "verify.sh: ok (v0.1 — checksums only). signatures: M5 (pending)."
+echo "verify.sh: ok. Run ./scripts/up.sh to bring the stack up."
