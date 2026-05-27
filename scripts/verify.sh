@@ -20,7 +20,7 @@ cd "$ROOT"
 # Images pinned in docker-compose.yml. Update on each version bump.
 # ----------------------------------------------------------------------
 KVENDRA_IMAGES=(
-  "ghcr.io/kvendraai/kvendra-platform:0.1.0-alpha.0"
+  "docker.io/kvendra/kvendra-platform:0.1.0-alpha.0"
 )
 
 # These are upstream public-registry images. We do not verify their signatures

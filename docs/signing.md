@@ -40,7 +40,7 @@ but you really shouldn't.
 ## Manual verification
 
 ```bash
-IMG=ghcr.io/kvendraai/kvendra-platform:0.1.0-alpha.0
+IMG=docker.io/kvendra/kvendra-platform:0.1.0-alpha.0
 
 # 1. Signature
 cosign verify "$IMG" \
@@ -92,7 +92,7 @@ URLs; we only use GitHub Actions today.
                      │
                      ▼
    ┌────────────────────────────────────┐
-   │ Image @ ghcr.io with signature     │
+   │ Image @ docker.io with signature   │
    └────────────────────────────────────┘
 ```
 
@@ -112,7 +112,7 @@ To extract the SBOM for a published image:
 
 ```bash
 cosign download attestation \
-  ghcr.io/kvendraai/kvendra-platform:0.1.0-alpha.0 \
+  docker.io/kvendra/kvendra-platform:0.1.0-alpha.0 \
   | jq -r '.payload' | base64 -d | jq '.predicate' > sbom.spdx.json
 ```
 
@@ -146,16 +146,22 @@ in the `KvendraAI/kvendra-platform` repo. It triggers on `v*.*.*` tag
 push and:
 
 1. Builds a multi-arch image (`linux/amd64,linux/arm64`).
-2. Pushes to `ghcr.io/kvendraai/kvendra-platform:<version>` + `:latest`.
+2. Pushes to `docker.io/kvendra/kvendra-platform:<version>` + `:latest`.
 3. Signs the digest with cosign keyless (GHA OIDC).
 4. Generates the SPDX SBOM with Syft.
 5. Attests the SBOM to the digest with cosign.
 6. Creates a GitHub Release with the SBOM as an asset.
 
-No secrets are needed beyond the default `GITHUB_TOKEN` — the
-`id-token: write` permission gives the workflow access to the OIDC
-token that Sigstore Fulcio exchanges for a short-lived signing
-certificate. **There are no long-lived keys to rotate or leak.**
+Two repo secrets are required for the Docker Hub push leg:
+
+- `DOCKERHUB_USERNAME` — Docker Hub account name (`kvendra`).
+- `DOCKERHUB_TOKEN` — Docker Hub Personal Access Token with
+  "Public Repo Read & Write" scope.
+
+The cosign signing leg is keyless — `id-token: write` permission gives
+the workflow access to the OIDC token that Sigstore Fulcio exchanges
+for a short-lived signing certificate. **There are no long-lived keys
+to rotate or leak for signing.**
 
 ## Frequently asked
 
