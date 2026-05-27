@@ -28,7 +28,7 @@ It packages — but does not modify — the following components, each under
 their own license:
 
 - kvendra-platform     (AGPL-3.0)  — github.com/KvendraAI/kvendra-platform
-- kvendra-skills       (Apache-2.0) — github.com/KvendraAI/skills
+- kvendra-skills       (Apache-2.0) — github.com/KvendraAI/kvendra-skills
 - kvendra-cli          (Apache-2.0) — github.com/KvendraAI/kvendra-cli  (host-side, not in compose)
 - Ollama               (MIT)        — github.com/ollama/ollama
 - PostgreSQL + pgvector (PostgreSQL License + pgvector PostgreSQL License) — pgvector/pgvector image

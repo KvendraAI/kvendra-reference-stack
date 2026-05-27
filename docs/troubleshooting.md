@@ -123,20 +123,19 @@ If this works but your CLI doesn't, check the CLI config — it might be
 pointing at `127.0.0.1:7777` (works) vs `http://localhost:7777/mcp` (the
 MCP endpoint, the `/mcp` suffix matters).
 
-For cline:
-```json
-// ~/.cline/data/settings/cline_mcp_settings.json
-{
-  "mcpServers": {
-    "kvendra-platform": {
-      "url": "http://localhost:7777/mcp",
-      "headers": {
-        "Authorization": "Bearer <token from data/auth.token>"
-      }
-    }
-  }
-}
+For Claude Code (recommended orchestrator — see PAT-KVD-4AF89B), register
+the platform as an MCP server with the bearer token from `data/auth.token`:
+
+```bash
+TOKEN="$(cat ./data/auth.token)"
+claude mcp add kvendra-platform http://localhost:7777/mcp \
+  -H "Authorization: Bearer $TOKEN"
 ```
+
+Then restart Claude Code so the new MCP server is picked up. Any other
+MCP-native IDE (Cursor, Windsurf, etc.) can consume the same endpoint
+with the same bearer header — see your IDE's MCP docs for the exact
+config syntax.
 
 ---
 
@@ -191,4 +190,4 @@ Bugs in **kvendra-platform** itself go to
 [`KvendraAI/kvendra-platform`](https://github.com/KvendraAI/kvendra-platform/issues).
 
 Bugs in the **community skills** go to
-[`KvendraAI/skills`](https://github.com/KvendraAI/skills/issues).
+[`KvendraAI/kvendra-skills`](https://github.com/KvendraAI/kvendra-skills/issues).

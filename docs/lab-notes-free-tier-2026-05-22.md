@@ -1,5 +1,22 @@
 # Free tier Kvendra — lab notes del E2E spike (2026-05-21/22)
 
+<!--
+PRESERVATION NOTE (2026-05-27)
+==============================
+These lab notes describe the original Ollama-everywhere E2E spike from
+May 2026, written when the default story for new users was "everything
+local via Ollama". The default has since moved to Cloud embeddings
+(api.kvendra.cloud, free tier) per PAT-KVD-4AF89B — Claude Code is the
+universal orchestrator and Ollama is now an opt-in profile.
+
+The notes below are preserved verbatim as a historical lab record. The
+hardware/software conclusions still apply if you choose the Ollama
+opt-in path (`./scripts/up.sh --with-ollama`), but the default path
+documented in README.md and docs/modes.md does NOT require Ollama at
+all. Treat this file as a deep-dive for users who want to reproduce the
+all-local experiment, not as the canonical install path.
+-->
+
 > **Disclaimer**: esto es **un informe de un test de concepto**, no un
 > manual oficial ni una recomendación de despliegue. Lo escribimos para
 > documentar lo que se probó y bajo qué condiciones, de manera que la

@@ -13,7 +13,7 @@ cd "$ROOT"
 if [[ ! -f .env ]]; then
   echo "no .env found — copying .env.example to .env"
   cp .env.example .env
-  echo "edit .env if you want a non-default tier (see docs/tier-a-b-c.md)."
+  echo "edit .env if you want a non-default mode (see docs/modes.md)."
 fi
 
 # Load .env so we can read OLLAMA_MODELS_PRELOAD below.
@@ -23,10 +23,42 @@ set -a
 set +a
 
 # ----------------------------------------------------------------------
-# 2. docker compose up -d (4 services).
+# 2. Parse flags and docker compose up.
 # ----------------------------------------------------------------------
-echo "starting stack (db + platform + ollama + backup)..."
-docker compose up -d
+WITH_OLLAMA=0
+for arg in "$@"; do
+  case "$arg" in
+    --with-ollama)
+      WITH_OLLAMA=1
+      ;;
+    -h|--help)
+      cat <<'USAGE'
+Usage: ./scripts/up.sh [--with-ollama]
+
+Brings up the Kvendra reference stack.
+
+Options:
+  --with-ollama   Also start the kvendra-ollama service (opt-in profile).
+                  Use this if you want everything local instead of using
+                  api.kvendra.cloud embeddings.
+  -h, --help      Show this help.
+
+Default mode (no flag): cloud embeddings via api.kvendra.cloud. Make sure
+EMBEDDINGS_API_KEY in .env is set to your real key (sign up at
+https://kvendra.cloud).
+USAGE
+      exit 0
+      ;;
+  esac
+done
+
+if [[ $WITH_OLLAMA -eq 1 ]]; then
+  echo "starting stack with Ollama profile (db + platform + ollama + backup)..."
+  COMPOSE_PROFILES=ollama docker compose --profile ollama up -d
+else
+  echo "starting stack (db + platform + backup)..."
+  docker compose up -d
+fi
 
 # ----------------------------------------------------------------------
 # 3. Wait for the platform healthz to be green (max 120s).
@@ -48,20 +80,22 @@ for i in $(seq 1 24); do
 done
 
 # ----------------------------------------------------------------------
-# 4. Preload Ollama models (if requested).
+# 4. Preload Ollama models (only if --with-ollama was passed).
 # ----------------------------------------------------------------------
-MODELS="${OLLAMA_MODELS_PRELOAD:-}"
-if [[ -n "$MODELS" ]]; then
-  echo "preloading Ollama models: $MODELS"
-  IFS=',' read -r -a model_list <<<"$MODELS"
-  for m in "${model_list[@]}"; do
-    m_trimmed="${m## }"
-    m_trimmed="${m_trimmed%% }"
-    if [[ -z "$m_trimmed" ]]; then continue; fi
-    echo "  pulling $m_trimmed"
-    docker compose exec -T kvendra-ollama ollama pull "$m_trimmed" \
-      || echo "  warning: pull failed for $m_trimmed (continuing)"
-  done
+if [[ $WITH_OLLAMA -eq 1 ]]; then
+  MODELS="${OLLAMA_MODELS_PRELOAD:-}"
+  if [[ -n "$MODELS" ]]; then
+    echo "preloading Ollama models: $MODELS"
+    IFS=',' read -r -a model_list <<<"$MODELS"
+    for m in "${model_list[@]}"; do
+      m_trimmed="${m## }"
+      m_trimmed="${m_trimmed%% }"
+      if [[ -z "$m_trimmed" ]]; then continue; fi
+      echo "  pulling $m_trimmed"
+      docker compose exec -T kvendra-ollama ollama pull "$m_trimmed" \
+        || echo "  warning: pull failed for $m_trimmed (continuing)"
+    done
+  fi
 fi
 
 # ----------------------------------------------------------------------
@@ -84,6 +118,29 @@ echo
 echo "endpoints:"
 echo "  platform healthz:   http://localhost:${PLATFORM_HOST_PORT:-7777}/healthz"
 echo "  platform MCP:       http://localhost:${PLATFORM_HOST_PORT:-7777}/mcp"
-echo "  ollama API:         http://localhost:${OLLAMA_HOST_PORT:-11434}/api/version"
+if [[ $WITH_OLLAMA -eq 1 ]]; then
+  echo "  ollama API:         http://localhost:${OLLAMA_HOST_PORT:-11434}/api/version"
+fi
 echo
 echo "next: configure your CLI / orchestrator on the host. see README.md."
+
+# ----------------------------------------------------------------------
+# 6. Detect placeholder API key and warn the user.
+# ----------------------------------------------------------------------
+if [[ $WITH_OLLAMA -eq 0 ]] && grep -qE '^EMBEDDINGS_API_KEY=REPLACE_WITH_YOUR_KVENDRA_KEY' .env; then
+  echo
+  echo "==============================================="
+  echo "⚠️  EMBEDDINGS_API_KEY is still set to the placeholder."
+  echo
+  echo "The default mode is Kvendra Cloud embeddings (api.kvendra.cloud)."
+  echo "Without a real key, entity_create and entity_search will fail."
+  echo
+  echo "Two options:"
+  echo "  1. Sign up at https://kvendra.cloud (free tier, 200k tok/month)"
+  echo "     and replace REPLACE_WITH_YOUR_KVENDRA_KEY in .env with your real key."
+  echo "  2. Switch to local Ollama: stop the stack, edit .env per the"
+  echo "     'Ollama local' block, then re-run:  ./scripts/up.sh --with-ollama"
+  echo
+  echo "See docs/modes.md for details."
+  echo "==============================================="
+fi

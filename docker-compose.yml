@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: MIT
 # kvendra-reference-stack v0.1 — Self-Hosted Community
 #
-# 4 containers (db + platform + ollama + backup). CLI lives on the host,
-# orchestrator (cline) lives on the host — per ROAD-KVD-716183 principles
-# 4 (CLI excluded) and PAT-KVD-819856 L3 (no master password in env vars).
+# 3-4 containers (db + platform + backup, optional ollama via profile).
+# CLI lives on the host. Orchestration is done by Claude Code (or any
+# MCP-native IDE) per PAT-KVD-4AF89B — Claude Code is the universal
+# orchestrator; Ollama runs as opt-in profile for users who prefer
+# everything local instead of api.kvendra.cloud embeddings.
 #
-# See ./docs/tier-a-b-c.md for the env-var gradient (self-hosted full /
-# hybrid L1 / hybrid L2) and ./docs/troubleshooting.md for common pitfalls.
+# See ./docs/modes.md for the three modes (cloud / ollama / mock) and
+# ./docs/troubleshooting.md for common pitfalls.
 
 services:
 
@@ -56,11 +58,13 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       STAGE: ${STAGE:-local}
 
-      # === Embeddings provider (M1 BYOK — see docs/tier-a-b-c.md) ===
-      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-mock}
-      EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-}
-      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-}
-      EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-}
+      # === Embeddings provider (M1 BYOK — see docs/modes.md) ===
+      # Default: Kvendra Cloud (api.kvendra.cloud, free tier 200k tok/mes).
+      # Replace EMBEDDINGS_API_KEY with your real key from https://kvendra.cloud
+      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-openai-compatible}
+      EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-https://api.kvendra.cloud/v1}
+      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-kvendra-embedding-v1}
+      EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-REPLACE_WITH_YOUR_KVENDRA_KEY}
       EMBEDDINGS_TIMEOUT_MS: ${EMBEDDINGS_TIMEOUT_MS:-30000}
     ports:
       - "${PLATFORM_HOST_PORT:-7777}:7777"
@@ -82,16 +86,21 @@ services:
   # 3. kvendra-ollama — Ollama runtime (MIT, LLM + embeddings server)
   # =====================================================================
   #
-  # Pulls and serves the baseline models. The platform reaches Ollama via
-  # the internal hostname `kvendra-ollama:11434`. Host port 11434 is
-  # exposed for the cline CLI on the host to use the same Ollama instance
+  # OPT-IN via the `ollama` compose profile. Pulls and serves baseline
+  # models. The platform reaches Ollama via the internal hostname
+  # `kvendra-ollama:11434`. Host port 11434 is exposed so Claude Code (or
+  # any MCP-native IDE) on the host can hit the same Ollama instance
   # (one model load, two consumers).
   #
-  # Disable this service entirely for hybrid L1 (kvendra-cloud embeddings):
-  #   docker compose up -d kvendra-db kvendra-platform kvendra-backup
+  # Default mode (cloud embeddings via api.kvendra.cloud) does NOT start
+  # this service. Enable it with:
+  #   docker compose --profile ollama up -d
+  #   # or via the helper script:
+  #   ./scripts/up.sh --with-ollama
   kvendra-ollama:
     image: ollama/ollama:0.24.0
     container_name: kvendra-ref-ollama
+    profiles: ["ollama"]
     restart: unless-stopped
     environment:
       OLLAMA_HOST: "0.0.0.0:11434"

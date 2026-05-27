@@ -3,9 +3,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
 **Docker compose for the full Kvendra self-hosted OSS stack** —
-Postgres + pgvector, kvendra-platform (KB engine, AGPL-3.0), Ollama
-(LLM + embeddings server, MIT), and a backup sidecar. The CLI and the
-orchestrator (cline) run on your host, not in the stack.
+Postgres + pgvector, kvendra-platform (KB engine, AGPL-3.0), a backup
+sidecar, and (opt-in) Ollama (LLM + embeddings server, MIT). The CLI
+runs on your host. Orchestration is handled by **Claude Code** (or any
+MCP-native IDE) — see PAT-KVD-4AF89B for the rationale.
 
 This repo is **M4 of `ROAD-KVD-716183`** (Self-Hosted Community) — the
 last implementation milestone before signing (M5) and the public
@@ -26,26 +27,34 @@ Both paths produce a functionally equivalent stack.
 git clone https://github.com/KvendraAI/kvendra-reference-stack
 cd kvendra-reference-stack
 cp .env.example .env
-# (Optional) edit .env to switch tier — see docs/tier-a-b-c.md
+# Default mode is cloud embeddings (api.kvendra.cloud, free tier).
+# Sign up at https://kvendra.cloud and paste your key into .env,
+# replacing REPLACE_WITH_YOUR_KVENDRA_KEY. See docs/modes.md for alternatives.
 ./scripts/up.sh
 ```
 
-`up.sh` waits for healthchecks and pulls the Ollama baseline models on
-first run (≈5 GB download).
+`up.sh` waits for healthchecks and, if you set the `--with-ollama` flag,
+also pulls the Ollama baseline models on first run (≈5 GB download).
 
-Then point your CLI / orchestrator on the **host** at the running platform:
+Then register the platform as an MCP server in **Claude Code** on your host:
 
 ```bash
 # 1. Read the bootstrap auth token:
-cat ./data/auth.token
+TOKEN="$(cat ./data/auth.token)"
 
-# 2. Configure cline (or Claude Code) MCP server:
-#    URL:     http://localhost:7777/mcp
-#    Header:  Authorization: Bearer <token from step 1>
+# 2. Add the platform as a Claude Code MCP server:
+claude mcp add kvendra-platform http://localhost:7777/mcp \
+  -H "Authorization: Bearer $TOKEN"
 
-# 3. (Optional) install the community skills:
-npx skills add KvendraAI/skills
+# 3. Restart Claude Code so the new MCP server is picked up.
 ```
+
+Any other MCP-native IDE (Cursor, Windsurf, etc.) can consume the same
+`http://localhost:7777/mcp` endpoint with the same bearer header.
+
+**Alternative: all-local with Ollama** — if you'd rather not use
+`api.kvendra.cloud`, edit `.env` per the "Ollama local" block and start
+the stack with `./scripts/up.sh --with-ollama`. See `docs/modes.md`.
 
 ## Build-from-source (Path B)
 
@@ -82,10 +91,10 @@ By design (see `ROAD-KVD-716183` principle 4 and `PAT-KVD-819856` L3):
   var would defeat its threat model. Install separately:
   `cargo install kvendra` (or download a signed binary from
   `github.com/KvendraAI/kvendra-cli/releases`).
-- **`cline`** (the orchestrator) — also runs on your host. cline is a
-  Node CLI, not a daemon; the container UX would be worse than just
-  running it. Install: `npm i -g cline`. Point it at the platform on
-  `localhost:7777/mcp`.
+- **The orchestrator** — Claude Code (or any other MCP-native IDE) runs
+  on your host and connects to the platform via the MCP endpoint at
+  `localhost:7777/mcp`. See PAT-KVD-4AF89B for why orchestration is a
+  host-side concern rather than a container.
 - **Helm chart** — that's a separate track (`kvendra-helm`), aimed at
   k8s production rather than developer self-hosting.
 
@@ -110,11 +119,10 @@ CPU). End-to-end empirical validation with both running on an 8 GB
 laptop is still **pending**; we'll publish the report in
 [`reports/`](./reports/) once it's done on adequate hardware.
 
-## Tier A / B / C
+## Operating modes
 
-See [`docs/tier-a-b-c.md`](./docs/tier-a-b-c.md) for the full env-var
-gradient and the trade-offs between aligned-with-SaaS, fully-local, and
-fully-managed deployments.
+See [`docs/modes.md`](./docs/modes.md) for the full env-var gradient and
+the trade-offs between the cloud-default, Ollama-opt-in, and mock modes.
 
 ## Troubleshooting
 
@@ -136,7 +144,7 @@ people's work. Substantive changes go to the upstream repos.
 
 - Stack composition / scripts → here.
 - KB engine behavior → `kvendra-platform`.
-- Skills content → `KvendraAI/skills` (Apache-2.0).
+- Skills content → `KvendraAI/kvendra-skills` (Apache-2.0).
 
 ## License
 
