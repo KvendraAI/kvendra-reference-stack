@@ -41,7 +41,7 @@ services:
   # 2. kvendra-platform — KB engine (AGPL-3.0, motor OSS)
   # =====================================================================
   kvendra-platform:
-    image: ghcr.io/kvendraai/kvendra-platform:0.1.0-alpha.0
+    image: kvendra/kvendra-platform:0.1.0-alpha.0
     container_name: kvendra-ref-platform
     restart: unless-stopped
     depends_on:

@@ -65,7 +65,8 @@ the stack with `./scripts/up.sh --with-ollama`. See `docs/modes.md`.
 This clones `kvendra-platform` from `github.com/KvendraAI/kvendra-platform`,
 builds the docker image locally (multi-stage Dockerfile), and overrides
 the `image:` field in `docker-compose.yml` to use your local build instead
-of `ghcr.io/kvendraai/kvendra-platform`. No image is pulled from a registry.
+of the upstream `kvendra/kvendra-platform` image. No image is pulled
+from a registry.
 
 For Ollama and Postgres, the upstream images are pulled by default (they
 are themselves open-source). To run **everything** from source, see
