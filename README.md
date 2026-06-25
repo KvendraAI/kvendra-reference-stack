@@ -53,8 +53,10 @@ Any other MCP-native IDE (Cursor, Windsurf, etc.) can consume the same
 `http://localhost:7777/mcp` endpoint with the same bearer header.
 
 **Alternative: all-local with Ollama** — if you'd rather not use
-`api.kvendra.cloud`, edit `.env` per the "Ollama local" block and start
-the stack with `./scripts/up.sh --with-ollama`. See `docs/modes.md`.
+`api.kvendra.cloud`, just start the stack with
+`./scripts/up.sh --with-ollama`. The flag starts the Ollama container
+**and** rewires the `EMBEDDINGS_*` vars in `.env` to point at it — no
+manual editing. See `docs/modes.md`.
 
 ## Build-from-source (Path B)
 

@@ -66,22 +66,34 @@ the `ollama` profile so the `kvendra-ollama` container is created:
 
 ```bash
 ./scripts/up.sh --with-ollama
-# or equivalently:
-docker compose --profile ollama up -d
 ```
 
-Then switch the embeddings env vars to point at the local container:
+That's it — **no manual `.env` editing needed**. The `--with-ollama`
+flag does two things for you:
+
+1. Starts the `kvendra-ollama` container (equivalent to
+   `docker compose --profile ollama up -d`).
+2. Rewires the embeddings env vars in `.env` so the platform points at
+   the local Ollama container instead of `api.kvendra.cloud`.
+
+After `--with-ollama`, `.env` will contain (rewritten in place,
+idempotently, with a marker comment):
 
 ```dotenv
-# .env
+# .env — set by up.sh --with-ollama
 EMBEDDINGS_PROVIDER=openai-compatible
 EMBEDDINGS_BASE_URL=http://kvendra-ollama:11434/v1
 EMBEDDINGS_MODEL=mxbai-embed-large
-# No EMBEDDINGS_API_KEY needed for local Ollama.
-
-# OLLAMA_MODELS_PRELOAD pulls these on first ./scripts/up.sh --with-ollama
-OLLAMA_MODELS_PRELOAD=llama3.1:8b,mxbai-embed-large
+# EMBEDDINGS_API_KEY is left as-is but unused for local Ollama.
 ```
+
+The embeddings model is pulled on the first `--with-ollama` run via
+`OLLAMA_MODELS_PRELOAD` (default `mxbai-embed-large`). If you also want a
+local LLM, append it (e.g. `OLLAMA_MODELS_PRELOAD=mxbai-embed-large,llama3.1:8b`).
+
+> If you'd rather wire it by hand (or use a different local model),
+> setting these three vars yourself produces the same result — the
+> script detects an existing definition and does not duplicate it.
 
 Caveats:
 
@@ -126,6 +138,12 @@ the whole stack down and bring it back up with (or without) the profile:
 docker compose down
 ./scripts/up.sh --with-ollama     # or just ./scripts/up.sh
 ```
+
+Re-running with `--with-ollama` also (re-)applies the Ollama embeddings
+wiring in `.env` for you, so this is the one command needed to switch
+onto local Ollama — no manual edit. To go back to Cloud, edit the three
+`EMBEDDINGS_*` lines back (and remove the `# set by up.sh --with-ollama`
+marker) before `./scripts/up.sh` without the flag.
 
 **Heads-up about re-embedding**: if you switch the **embedding model**
 (Cloud ↔ Ollama, or the Ollama model changes), existing vectors in the

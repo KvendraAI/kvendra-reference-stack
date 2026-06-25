@@ -16,14 +16,9 @@ if [[ ! -f .env ]]; then
   echo "edit .env if you want a non-default mode (see docs/modes.md)."
 fi
 
-# Load .env so we can read OLLAMA_MODELS_PRELOAD below.
-set -a
-# shellcheck disable=SC1091
-. ./.env
-set +a
-
 # ----------------------------------------------------------------------
-# 2. Parse flags and docker compose up.
+# 1b. Parse flags BEFORE sourcing .env, so --with-ollama can rewire the
+#     embeddings vars in .env before we load them into the environment.
 # ----------------------------------------------------------------------
 WITH_OLLAMA=0
 for arg in "$@"; do
@@ -38,9 +33,11 @@ Usage: ./scripts/up.sh [--with-ollama]
 Brings up the Kvendra reference stack.
 
 Options:
-  --with-ollama   Also start the kvendra-ollama service (opt-in profile).
-                  Use this if you want everything local instead of using
-                  api.kvendra.cloud embeddings.
+  --with-ollama   Also start the kvendra-ollama service (opt-in profile) AND
+                  point the platform's embeddings at the local Ollama
+                  container automatically (rewires the EMBEDDINGS_* vars in
+                  .env for you — no manual editing). Use this if you want
+                  everything local instead of api.kvendra.cloud embeddings.
   -h, --help      Show this help.
 
 Default mode (no flag): cloud embeddings via api.kvendra.cloud. Make sure
@@ -52,6 +49,65 @@ USAGE
   esac
 done
 
+# ----------------------------------------------------------------------
+# 1c. Auto-wire the embeddings vars when --with-ollama is passed.
+#     Without this, --with-ollama only starts the Ollama container but the
+#     platform keeps pointing at api.kvendra.cloud (the .env default), so
+#     the user would have to hand-edit three EMBEDDINGS_* lines. We rewrite
+#     them in place — idempotent (re-running changes nothing) and marked
+#     with a comment so it's clear they were set by this script.
+# ----------------------------------------------------------------------
+
+OLLAMA_WIRE_MARKER="# set by up.sh --with-ollama"
+
+# set_env_var KEY VALUE [MARKER] — set KEY=VALUE in .env, replacing an
+# existing (commented or uncommented) definition of KEY in place, or
+# appending if absent. If MARKER is non-empty, the marker comment line is
+# emitted immediately before KEY (added if missing, not duplicated).
+# Idempotent: running it again with the same VALUE leaves .env unchanged.
+# Uses awk + temp file for portability (BSD/macOS sed has no portable -i).
+set_env_var() {
+  local key="$1" value="$2" marker="${3:-}"
+  awk -v key="$key" -v val="$value" -v marker="$marker" '
+    # Drop any pre-existing standalone marker line; we re-emit it (once)
+    # right before the key, so repeated runs do not pile up markers.
+    marker != "" && $0 == marker { next }
+    !replaced && $0 ~ "^[[:space:]]*#?[[:space:]]*" key "=" {
+      if (marker != "") print marker
+      print key "=" val
+      replaced = 1
+      next
+    }
+    { print }
+    END {
+      if (!replaced) {
+        if (marker != "") print marker
+        print key "=" val
+      }
+    }
+  ' .env > .env.tmp && mv .env.tmp .env
+}
+
+if [[ $WITH_OLLAMA -eq 1 ]]; then
+  echo "--with-ollama: pointing platform embeddings at the local Ollama container."
+  set_env_var EMBEDDINGS_PROVIDER openai-compatible "$OLLAMA_WIRE_MARKER"
+  set_env_var EMBEDDINGS_BASE_URL http://kvendra-ollama:11434/v1
+  set_env_var EMBEDDINGS_MODEL mxbai-embed-large
+fi
+
+# ----------------------------------------------------------------------
+# 1d. Load .env (now possibly rewired) into the environment so compose
+#     interpolates the right EMBEDDINGS_* values, and so we can read
+#     OLLAMA_MODELS_PRELOAD / PLATFORM_HOST_PORT below.
+# ----------------------------------------------------------------------
+set -a
+# shellcheck disable=SC1091
+. ./.env
+set +a
+
+# ----------------------------------------------------------------------
+# 2. docker compose up.
+# ----------------------------------------------------------------------
 if [[ $WITH_OLLAMA -eq 1 ]]; then
   echo "starting stack with Ollama profile (db + platform + ollama + backup)..."
   COMPOSE_PROFILES=ollama docker compose --profile ollama up -d
@@ -105,14 +161,26 @@ echo
 echo "==============================================="
 echo "stack ready."
 echo
-TOKEN_PATH="$ROOT/data/auth.token"
-if [[ -f "$TOKEN_PATH" ]]; then
+# The auth token lives INSIDE the platform container (named volume
+# kvendra_ref_platform_data mounted at /data), not on the host. Read it via
+# `docker compose exec` on the platform SERVICE name (kvendra-platform), not
+# the container_name. It can lag the healthcheck by a second or two, so retry.
+TOKEN=""
+for attempt in 1 2 3; do
+  TOKEN="$(docker compose exec -T kvendra-platform cat /data/auth.token 2>/dev/null || true)"
+  TOKEN="${TOKEN//$'\r'/}"
+  if [[ -n "$TOKEN" ]]; then
+    break
+  fi
+  sleep 2
+done
+if [[ -n "$TOKEN" ]]; then
   echo "auth token (bearer for MCP):"
-  cat "$TOKEN_PATH"
+  echo "$TOKEN"
   echo
 else
   echo "auth token not yet generated."
-  echo "wait a few seconds and re-check:  cat $TOKEN_PATH"
+  echo "wait a few seconds and re-check:  docker compose exec kvendra-platform cat /data/auth.token"
 fi
 echo
 echo "endpoints:"
