@@ -2,108 +2,102 @@
 
 # Operating modes
 
-The Kvendra Self-Hosted Community stack is **one set of containers** but
-**three possible operating modes**, selected via the `EMBEDDINGS_*` env
-vars and (for Ollama) a docker compose profile. They trade off privacy
-vs alignment with the SaaS vs ops simplicity. The default is **Cloud
-embeddings** — easiest path for someone who just signed up at
-`https://kvendra.cloud`.
+The Kvendra Self-Hosted Community stack is **one set of containers**
+with **two built-in embeddings modes**, plus the option to point it at
+**your own provider**. The mode is selected via the `EMBEDDINGS_*` env
+vars in `.env`. The default is **local Ollama** — no account, no API
+key, nothing leaves your machine.
 
 ## At a glance
 
-| Aspect | Cloud (default) | Ollama (opt-in) | Mock (CI / dev) |
+| Aspect | Ollama (default) | Your own provider | Mock (CI / dev) |
 |---|---|---|---|
-| Embeddings | `api.kvendra.cloud` (free tier) | Local Ollama (`mxbai-embed-large`) | Deterministic test vectors |
-| LLM | Whatever your orchestrator uses (Claude Code → Anthropic; or local Ollama) | Local Ollama | n/a |
-| Containers started | 3 (db + platform + backup) | 4 (db + platform + ollama + backup) | 3 (db + platform + backup) |
-| Cost | $0 (free tier, 200k tok/month) | $0 | $0 |
-| Hardware footprint | ≥4 GB RAM, no GPU needed | ≥16 GB RAM, GPU recommended | ≥4 GB RAM |
-| Network calls | embeddings to `api.kvendra.cloud` | none (after model pulls) | none |
-| Privacy of embedded text | sent to `api.kvendra.cloud` | stays on your machine | n/a |
+| Embeddings | Local Ollama (`mxbai-embed-large`, 1024-dim) | Any OpenAI-compatible endpoint serving a 1024-dim model | Deterministic test vectors |
+| Start command | `./scripts/up.sh` | `./scripts/up.sh --no-ollama` | `./scripts/up.sh --no-ollama` |
+| Containers started | 4 (db + platform + ollama + backup) | 3 (db + platform + backup) | 3 (db + platform + backup) |
+| Account / API key | none | your provider's | none |
+| Hardware footprint | ≥8 GB RAM for embeddings only, no GPU needed | ≥4 GB RAM | ≥4 GB RAM |
+| Network calls | none (after the first model pull) | embeddings to your provider | none |
+| Privacy of embedded text | stays on your machine | sent to your provider | n/a |
+
+The LLM is whatever your orchestrator uses (Claude Code → Anthropic, or
+a local model) — it is independent of the embeddings mode.
 
 The managed SaaS at [kvendra.com/enterprise](https://kvendra.com/enterprise)
 is a **separate product**, not a mode of this stack — listed elsewhere
 in the docs for completeness.
 
-## Cloud (default)
-
-Embeddings come from `api.kvendra.cloud` (free tier currently 200,000
-tokens/month/user). No Ollama container is started. Best path if you
-want the fastest setup and don't mind sending the strings being embedded
-to Kvendra Cloud (your full conversation never leaves — only the
-embedding input strings).
-
-```dotenv
-# .env (already the default in .env.example)
-EMBEDDINGS_PROVIDER=openai-compatible
-EMBEDDINGS_BASE_URL=https://api.kvendra.cloud/v1
-EMBEDDINGS_MODEL=kvendra-embedding-v1
-EMBEDDINGS_API_KEY=REPLACE_WITH_YOUR_KVENDRA_KEY
-```
-
-Signup steps:
-
-1. Sign up at [https://kvendra.cloud](https://kvendra.cloud) (free tier).
-2. Generate an API key from the dashboard.
-3. Paste it into `.env` replacing `REPLACE_WITH_YOUR_KVENDRA_KEY`.
-4. `./scripts/up.sh` — `up.sh` will warn you if the placeholder is still
-   present.
-5. (Optional) `./scripts/smoke-cloud.sh` to verify the key reaches the
-   embeddings endpoint and returns a 1024-dim vector.
-
-Caveats:
-
-- Network dependency: if `api.kvendra.cloud` is unreachable,
-  `entity_create` and `entity_search` fail until restored.
-- You're sharing your **text prompts** for embedding generation with
-  Kvendra Cloud. The free-tier privacy policy applies.
-
-## Ollama (opt-in)
+## Ollama (default)
 
 Everything on your machine. Zero outbound network calls beyond what
-Ollama needs to fetch model weights the first time. Start the stack with
-the `ollama` profile so the `kvendra-ollama` container is created:
+Ollama needs to fetch model weights the first time.
 
 ```bash
-./scripts/up.sh --with-ollama
+cp .env.example .env
+./scripts/up.sh
 ```
 
-That's it — **no manual `.env` editing needed**. The `--with-ollama`
-flag does two things for you:
-
-1. Starts the `kvendra-ollama` container (equivalent to
-   `docker compose --profile ollama up -d`).
-2. Rewires the embeddings env vars in `.env` so the platform points at
-   the local Ollama container instead of `api.kvendra.cloud`.
-
-After `--with-ollama`, `.env` will contain (rewritten in place,
-idempotently, with a marker comment):
+`.env.example` already points the platform at the local container:
 
 ```dotenv
-# .env — set by up.sh --with-ollama
 EMBEDDINGS_PROVIDER=openai-compatible
 EMBEDDINGS_BASE_URL=http://kvendra-ollama:11434/v1
 EMBEDDINGS_MODEL=mxbai-embed-large
-# EMBEDDINGS_API_KEY is left as-is but unused for local Ollama.
+EMBEDDINGS_API_KEY=
 ```
 
-The embeddings model is pulled on the first `--with-ollama` run via
-`OLLAMA_MODELS_PRELOAD` (default `mxbai-embed-large`). If you also want a
-local LLM, append it (e.g. `OLLAMA_MODELS_PRELOAD=mxbai-embed-large,llama3.1:8b`).
+`up.sh` starts the `kvendra-ollama` container and pulls the models
+listed in `OLLAMA_MODELS_PRELOAD` (default `mxbai-embed-large`). If you
+also want a local LLM, append it (e.g.
+`OLLAMA_MODELS_PRELOAD=mxbai-embed-large,llama3.1:8b`).
 
-> If you'd rather wire it by hand (or use a different local model),
-> setting these three vars yourself produces the same result — the
-> script detects an existing definition and does not duplicate it.
+Verify end to end (create + semantic search):
+
+```bash
+./scripts/smoke.sh
+```
+
+> `--with-ollama` is still accepted by `up.sh` for older instructions,
+> but it has no effect: Ollama is the default.
+
+## Your own OpenAI-compatible provider
+
+Point the platform at any endpoint that follows the OpenAI
+`/v1/embeddings` shape. **The Platform validates 1024-dim vectors and
+does not send a `dimensions` parameter**, so pick a model that is
+natively 1024-dim:
+
+- vLLM or Hugging Face TEI serving `mxbai-embed-large` or `bge-large-en-v1.5`
+- Mistral `mistral-embed`
+- a gateway (e.g. LiteLLM, or
+  [bedrock-access-gateway](https://github.com/aws-samples/bedrock-access-gateway)
+  for Bedrock Titan v2) that pins the output to 1024 dimensions
+
+Models that default to another size (e.g. OpenAI `text-embedding-3-*`)
+only work behind such a gateway.
+
+```dotenv
+# .env
+EMBEDDINGS_PROVIDER=openai-compatible
+EMBEDDINGS_BASE_URL=https://your-provider.example.com/v1
+EMBEDDINGS_MODEL=mxbai-embed-large
+EMBEDDINGS_API_KEY=your-provider-key
+```
+
+Then start the stack without the Ollama container and run the smoke
+test:
+
+```bash
+./scripts/up.sh --no-ollama
+./scripts/smoke.sh
+```
 
 Caveats:
 
-- Vectors are produced by `mxbai-embed-large`. If you later switch to
-  Cloud you need to **re-embed** the corpus — vectors are not portable
-  across embedding models. This is a property of embeddings, not a
-  Kvendra limitation.
-- LLM responses depend on whatever your orchestrator uses. Llama 3.1 8B
-  is the baseline against which the canonical skills are tuned; other
-  models may need adjustments.
+- Network dependency: if your provider is unreachable, `entity_create`
+  and `entity_search` fail until it is back.
+- The strings being embedded (entity titles/content and search queries)
+  are sent to your provider; its privacy terms apply.
 
 ## Mock (CI / dev)
 
@@ -119,48 +113,47 @@ EMBEDDINGS_MODEL=
 EMBEDDINGS_API_KEY=
 ```
 
-Search results in this mode are non-semantic (the mock returns the same
-vector for any input). Don't use it for real work.
+Start it with `./scripts/up.sh --no-ollama`. Search results in this
+mode are non-semantic. Don't use it for real work.
 
 ## Switching modes
 
-You can change mode by editing `.env` and restarting the platform:
-
-```bash
-# edit .env, then:
-docker compose restart kvendra-platform
-```
-
-If you also need to add or remove the `kvendra-ollama` container, take
-the whole stack down and bring it back up with (or without) the profile:
+Edit the `EMBEDDINGS_*` lines in `.env`, then bring the stack back up
+with (or without) Ollama:
 
 ```bash
 docker compose down
-./scripts/up.sh --with-ollama     # or just ./scripts/up.sh
+./scripts/up.sh                 # Ollama
+./scripts/up.sh --no-ollama     # your own provider / mock
 ```
 
-Re-running with `--with-ollama` also (re-)applies the Ollama embeddings
-wiring in `.env` for you, so this is the one command needed to switch
-onto local Ollama — no manual edit. To go back to Cloud, edit the three
-`EMBEDDINGS_*` lines back (and remove the `# set by up.sh --with-ollama`
-marker) before `./scripts/up.sh` without the flag.
+If only the provider settings changed (the set of containers is the
+same), restarting the platform is enough:
+`docker compose restart kvendra-platform`.
 
-**Heads-up about re-embedding**: if you switch the **embedding model**
-(Cloud ↔ Ollama, or the Ollama model changes), existing vectors in the
-DB are still based on the old model. Search results may be incoherent
-until the corpus is re-embedded. M2 of `ROAD-KVD-PLATFORM-2EC0AE` will
-deliver a `kvendra reindex` command; until then, switching modes on a
-populated DB is a soft caveat.
+### Switching provider = re-embedding
 
-## What about Bedrock / OpenAI / Voyage / Cohere?
+Changing provider **or** model changes the vector space — even when
+both produce 1024-dim vectors. Vectors already stored in the DB were
+produced by the old model and are not comparable with the new ones, so
+search results become incoherent until the corpus is re-embedded.
+Re-embed your existing entities after switching (or start from an
+empty KB). M2 of `ROAD-KVD-PLATFORM-2EC0AE` will deliver a
+`kvendra reindex` command; until then, switching on a populated DB is a
+caveat to plan for. This is a property of embeddings, not a Kvendra
+limitation.
 
-All of them are supported by setting `EMBEDDINGS_BASE_URL` to the
-provider's OpenAI-compatible endpoint (Bedrock via
-[bedrock-access-gateway](https://github.com/aws-samples/bedrock-access-gateway),
-others natively). Just use the same `openai-compatible` provider with a
-different `EMBEDDINGS_BASE_URL`. The mock provider and the bedrock
-provider live elsewhere — see `kvendra-platform/src/embeddings/` and
-`ADR-KVD-1823F7` for the Open Core boundary.
+### Older `.env` files
+
+The hosted Kvendra embeddings endpoint has been retired (2026-10-01).
+If your `.env` still points at it, `up.sh` rewrites the `EMBEDDINGS_*`
+lines to the local Ollama defaults (marked with
+`# set by up.sh (kvendra cloud embeddings retired)`) and reminds you to
+re-embed.
+
+The mock provider and the bedrock provider live elsewhere — see
+`kvendra-platform/src/embeddings/` and `ADR-KVD-1823F7` for the Open
+Core boundary.
 
 ## Skill variants for non-Claude-Code IDEs
 

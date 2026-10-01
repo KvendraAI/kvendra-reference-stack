@@ -4,7 +4,7 @@
 
 **Docker compose for the full Kvendra self-hosted OSS stack** —
 Postgres + pgvector, kvendra-platform (KB engine, AGPL-3.0), a backup
-sidecar, and (opt-in) Ollama (LLM + embeddings server, MIT). The CLI
+sidecar, and Ollama (embeddings server, MIT; started by default). The CLI
 runs on your host. Orchestration is handled by **Claude Code** (or any
 MCP-native IDE) — see PAT-KVD-4AF89B for the rationale.
 
@@ -27,14 +27,14 @@ Both paths produce a functionally equivalent stack.
 git clone https://github.com/KvendraAI/kvendra-reference-stack
 cd kvendra-reference-stack
 cp .env.example .env
-# Default mode is cloud embeddings (api.kvendra.cloud, free tier).
-# Sign up at https://kvendra.cloud and paste your key into .env,
-# replacing REPLACE_WITH_YOUR_KVENDRA_KEY. See docs/modes.md for alternatives.
+# Default: embeddings by a local Ollama container (mxbai-embed-large).
+# No account or API key needed. See docs/modes.md for alternatives.
 ./scripts/up.sh
+./scripts/smoke.sh   # optional: create + semantic search end to end
 ```
 
-`up.sh` waits for healthchecks and, if you set the `--with-ollama` flag,
-also pulls the Ollama baseline models on first run (≈5 GB download).
+`up.sh` starts the stack, waits for healthchecks and pulls the
+embeddings model on first run (≈700 MB download).
 
 Then register the platform as an MCP server in **Claude Code** on your host:
 
@@ -52,11 +52,12 @@ claude mcp add kvendra-platform http://localhost:7777/mcp \
 Any other MCP-native IDE (Cursor, Windsurf, etc.) can consume the same
 `http://localhost:7777/mcp` endpoint with the same bearer header.
 
-**Alternative: all-local with Ollama** — if you'd rather not use
-`api.kvendra.cloud`, just start the stack with
-`./scripts/up.sh --with-ollama`. The flag starts the Ollama container
-**and** rewires the `EMBEDDINGS_*` vars in `.env` to point at it — no
-manual editing. See `docs/modes.md`.
+**Alternative: your own embeddings provider** — point the
+`EMBEDDINGS_*` vars in `.env` at any OpenAI-compatible endpoint serving a
+natively 1024-dim model (e.g. vLLM/TEI with `mxbai-embed-large` or
+`bge-large-en-v1.5`, Mistral `mistral-embed`) and start with
+`./scripts/up.sh --no-ollama`. Switching provider means re-embedding
+your existing entities. See `docs/modes.md`.
 
 ## Build-from-source (Path B)
 
@@ -111,9 +112,9 @@ For the **full local stack** (Tier B — both LLM and embeddings on Ollama):
 | Disk | 20 GB free | 50 GB free |
 | GPU | None (CPU works for embeddings) | 8 GB VRAM for LLM inference |
 
-For **Tier A** (hybrid: embeddings via kvendra.cloud, LLM via local Ollama):
-8 GB RAM is enough if you skip the LLM (only embed locally). For LLM
-inference, same as above.
+For **embeddings only** (the default: Ollama serves `mxbai-embed-large`,
+the LLM is whatever your orchestrator uses): 8 GB RAM is enough. With
+your own embeddings provider (`--no-ollama`), 4 GB RAM is enough.
 
 **Caveat from the M2 spike**: an Apple Silicon laptop without a
 discrete GPU can run **`mxbai-embed-large` (embeddings)** comfortably,
@@ -125,7 +126,7 @@ laptop is still **pending**; we'll publish the report in
 ## Operating modes
 
 See [`docs/modes.md`](./docs/modes.md) for the full env-var gradient and
-the trade-offs between the cloud-default, Ollama-opt-in, and mock modes.
+the trade-offs between the Ollama default, your own provider, and mock.
 
 ## Troubleshooting
 

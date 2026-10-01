@@ -1,5 +1,12 @@
 # Free tier Kvendra — lab notes del E2E spike (2026-05-21/22)
 
+> **Update 2026-10-01:** the hosted Kvendra Cloud embeddings endpoint has
+> been retired. Local Ollama is the default again (`./scripts/up.sh`, no
+> flag needed), and the alternative is your own OpenAI-compatible provider
+> with a natively 1024-dim model (`./scripts/up.sh --no-ollama`). See
+> [`docs/modes.md`](./modes.md). The preservation note below is kept as
+> historical context.
+
 <!--
 PRESERVATION NOTE (2026-05-27)
 ==============================

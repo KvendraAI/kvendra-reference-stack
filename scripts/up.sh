@@ -17,48 +17,55 @@ if [[ ! -f .env ]]; then
 fi
 
 # ----------------------------------------------------------------------
-# 1b. Parse flags BEFORE sourcing .env, so --with-ollama can rewire the
-#     embeddings vars in .env before we load them into the environment.
+# 1b. Parse flags BEFORE sourcing .env, so the legacy-.env migration below
+#     can rewrite the embeddings vars before we load them.
 # ----------------------------------------------------------------------
-WITH_OLLAMA=0
+NO_OLLAMA=0
 for arg in "$@"; do
   case "$arg" in
     --with-ollama)
-      WITH_OLLAMA=1
+      # Kept as a no-op alias: Ollama is the default now. Accepting the flag
+      # keeps previously published commands (README, llms.txt) working.
+      ;;
+    --no-ollama)
+      NO_OLLAMA=1
       ;;
     -h|--help)
       cat <<'USAGE'
-Usage: ./scripts/up.sh [--with-ollama]
+Usage: ./scripts/up.sh [--no-ollama]
 
-Brings up the Kvendra reference stack.
+Brings up the Kvendra reference stack. By default it starts the local
+kvendra-ollama container and pulls the embeddings model (mxbai-embed-large,
+1024-dim) — no account or API key needed.
 
 Options:
-  --with-ollama   Also start the kvendra-ollama service (opt-in profile) AND
-                  point the platform's embeddings at the local Ollama
-                  container automatically (rewires the EMBEDDINGS_* vars in
-                  .env for you — no manual editing). Use this if you want
-                  everything local instead of api.kvendra.cloud embeddings.
+  --no-ollama     Do not start kvendra-ollama and skip the model preload.
+                  Use this when EMBEDDINGS_* in .env point at your own
+                  OpenAI-compatible provider (natively 1024-dim model).
+  --with-ollama   Accepted for backwards compatibility; no effect (Ollama
+                  is the default).
   -h, --help      Show this help.
 
-Default mode (no flag): cloud embeddings via api.kvendra.cloud. Make sure
-EMBEDDINGS_API_KEY in .env is set to your real key (sign up at
-https://kvendra.cloud).
+See docs/modes.md for the available modes.
 USAGE
       exit 0
+      ;;
+    *)
+      echo "warning: ignoring unknown option: $arg (see ./scripts/up.sh --help)" >&2
       ;;
   esac
 done
 
 # ----------------------------------------------------------------------
-# 1c. Auto-wire the embeddings vars when --with-ollama is passed.
-#     Without this, --with-ollama only starts the Ollama container but the
-#     platform keeps pointing at api.kvendra.cloud (the .env default), so
-#     the user would have to hand-edit three EMBEDDINGS_* lines. We rewrite
-#     them in place — idempotent (re-running changes nothing) and marked
+# 1c. Migrate legacy .env files that still point at the retired Kvendra
+#     Cloud embeddings endpoint (the old hosted base URL / model alias).
+#     That service no longer exists, so such a stack cannot embed anything.
+#     We rewrite the EMBEDDINGS_* lines in place to the local Ollama
+#     defaults — idempotent (a migrated .env no longer matches) and marked
 #     with a comment so it's clear they were set by this script.
 # ----------------------------------------------------------------------
 
-OLLAMA_WIRE_MARKER="# set by up.sh --with-ollama"
+MIGRATION_MARKER="# set by up.sh (kvendra cloud embeddings retired)"
 
 # set_env_var KEY VALUE [MARKER] — set KEY=VALUE in .env, replacing an
 # existing (commented or uncommented) definition of KEY in place, or
@@ -88,11 +95,22 @@ set_env_var() {
   ' .env > .env.tmp && mv .env.tmp .env
 }
 
-if [[ $WITH_OLLAMA -eq 1 ]]; then
-  echo "--with-ollama: pointing platform embeddings at the local Ollama container."
-  set_env_var EMBEDDINGS_PROVIDER openai-compatible "$OLLAMA_WIRE_MARKER"
+if grep -qE '^[[:space:]]*EMBEDDINGS_(BASE_URL|MODEL)=.*(api\.kvendra\.cloud|kvendra-embedding-v1)' .env; then
+  echo
+  echo "==============================================="
+  echo "NOTE: your .env points at the Kvendra Cloud embeddings endpoint,"
+  echo "which has been retired. Rewriting EMBEDDINGS_* to the local Ollama"
+  echo "defaults (mxbai-embed-large, 1024-dim)."
+  echo
+  echo "If your knowledge base already holds entities embedded with the old"
+  echo "provider, re-embed them: vectors from different providers/models are"
+  echo "not comparable, even at the same dimension. See docs/modes.md."
+  echo "==============================================="
+  echo
+  set_env_var EMBEDDINGS_PROVIDER openai-compatible "$MIGRATION_MARKER"
   set_env_var EMBEDDINGS_BASE_URL http://kvendra-ollama:11434/v1
   set_env_var EMBEDDINGS_MODEL mxbai-embed-large
+  set_env_var EMBEDDINGS_API_KEY ""
 fi
 
 # ----------------------------------------------------------------------
@@ -108,11 +126,15 @@ set +a
 # ----------------------------------------------------------------------
 # 2. docker compose up.
 # ----------------------------------------------------------------------
-if [[ $WITH_OLLAMA -eq 1 ]]; then
-  echo "starting stack with Ollama profile (db + platform + ollama + backup)..."
-  COMPOSE_PROFILES=ollama docker compose --profile ollama up -d
+if [[ $NO_OLLAMA -eq 1 ]]; then
+  echo "starting stack without Ollama (db + platform + backup)..."
+  if grep -qE '^[[:space:]]*EMBEDDINGS_BASE_URL=.*kvendra-ollama' .env; then
+    echo "warning: --no-ollama but EMBEDDINGS_BASE_URL in .env still points at"
+    echo "         kvendra-ollama. Set your own provider in .env (see docs/modes.md)."
+  fi
+  docker compose up -d --scale kvendra-ollama=0
 else
-  echo "starting stack (db + platform + backup)..."
+  echo "starting stack (db + platform + ollama + backup)..."
   docker compose up -d
 fi
 
@@ -136,9 +158,9 @@ for i in $(seq 1 24); do
 done
 
 # ----------------------------------------------------------------------
-# 4. Preload Ollama models (only if --with-ollama was passed).
+# 4. Preload Ollama models (skipped with --no-ollama).
 # ----------------------------------------------------------------------
-if [[ $WITH_OLLAMA -eq 1 ]]; then
+if [[ $NO_OLLAMA -eq 0 ]]; then
   MODELS="${OLLAMA_MODELS_PRELOAD:-}"
   if [[ -n "$MODELS" ]]; then
     echo "preloading Ollama models: $MODELS"
@@ -186,29 +208,9 @@ echo
 echo "endpoints:"
 echo "  platform healthz:   http://localhost:${PLATFORM_HOST_PORT:-7777}/healthz"
 echo "  platform MCP:       http://localhost:${PLATFORM_HOST_PORT:-7777}/mcp"
-if [[ $WITH_OLLAMA -eq 1 ]]; then
+if [[ $NO_OLLAMA -eq 0 ]]; then
   echo "  ollama API:         http://localhost:${OLLAMA_HOST_PORT:-11434}/api/version"
 fi
 echo
 echo "next: configure your CLI / orchestrator on the host. see README.md."
-
-# ----------------------------------------------------------------------
-# 6. Detect placeholder API key and warn the user.
-# ----------------------------------------------------------------------
-if [[ $WITH_OLLAMA -eq 0 ]] && grep -qE '^EMBEDDINGS_API_KEY=REPLACE_WITH_YOUR_KVENDRA_KEY' .env; then
-  echo
-  echo "==============================================="
-  echo "⚠️  EMBEDDINGS_API_KEY is still set to the placeholder."
-  echo
-  echo "The default mode is Kvendra Cloud embeddings (api.kvendra.cloud)."
-  echo "Without a real key, entity_create and entity_search will fail."
-  echo
-  echo "Two options:"
-  echo "  1. Sign up at https://kvendra.cloud (free tier, 200k tok/month)"
-  echo "     and replace REPLACE_WITH_YOUR_KVENDRA_KEY in .env with your real key."
-  echo "  2. Switch to local Ollama: stop the stack, edit .env per the"
-  echo "     'Ollama local' block, then re-run:  ./scripts/up.sh --with-ollama"
-  echo
-  echo "See docs/modes.md for details."
-  echo "==============================================="
-fi
+echo "smoke test (create + semantic search): ./scripts/smoke.sh"

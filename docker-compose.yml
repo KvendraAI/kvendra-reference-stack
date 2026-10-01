@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: MIT
 # kvendra-reference-stack v0.1 — Self-Hosted Community
 #
-# 3-4 containers (db + platform + backup, optional ollama via profile).
-# CLI lives on the host. Orchestration is done by Claude Code (or any
-# MCP-native IDE) per PAT-KVD-4AF89B — Claude Code is the universal
-# orchestrator; Ollama runs as opt-in profile for users who prefer
-# everything local instead of api.kvendra.cloud embeddings.
+# 4 containers (db + platform + ollama + backup). CLI lives on the host.
+# Orchestration is done by Claude Code (or any MCP-native IDE) per
+# PAT-KVD-4AF89B — Claude Code is the universal orchestrator; Ollama
+# serves the embeddings locally by default (no account needed). Bring your
+# own OpenAI-compatible provider with `./scripts/up.sh --no-ollama`.
 #
-# See ./docs/modes.md for the three modes (cloud / ollama / mock) and
+# See ./docs/modes.md for the modes (ollama / own provider / mock) and
 # ./docs/troubleshooting.md for common pitfalls.
 
 services:
@@ -47,9 +47,9 @@ services:
     depends_on:
       kvendra-db:
         condition: service_healthy
-      # ollama dependency is soft — platform boots with mock provider if
-      # ollama is unreachable. We don't depend_on it explicitly so the
-      # stack still starts if the user disables ollama (hybrid L1/L2).
+      # ollama dependency is soft — we don't depend_on it explicitly so the
+      # stack still starts when the user skips it (`up.sh --no-ollama`) and
+      # points the platform at their own embeddings provider.
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-kvendra}:${POSTGRES_PASSWORD:-kvendra}@kvendra-db:5432/${POSTGRES_DB:-kvendra_platform}
       AUTH_TOKEN_FILE: /data/auth.token
@@ -59,12 +59,12 @@ services:
       STAGE: ${STAGE:-local}
 
       # === Embeddings provider (M1 BYOK — see docs/modes.md) ===
-      # Default: Kvendra Cloud (api.kvendra.cloud, free tier 200k tok/mes).
-      # Replace EMBEDDINGS_API_KEY with your real key from https://kvendra.cloud
+      # Default: local Ollama (kvendra-ollama, mxbai-embed-large, 1024-dim).
+      # No API key needed. Own provider: see the block in .env.example.
       EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-openai-compatible}
-      EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-https://api.kvendra.cloud/v1}
-      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-kvendra-embedding-v1}
-      EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-REPLACE_WITH_YOUR_KVENDRA_KEY}
+      EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-http://kvendra-ollama:11434/v1}
+      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-mxbai-embed-large}
+      EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-}
       EMBEDDINGS_TIMEOUT_MS: ${EMBEDDINGS_TIMEOUT_MS:-30000}
     ports:
       - "${PLATFORM_HOST_PORT:-7777}:7777"
@@ -86,21 +86,18 @@ services:
   # 3. kvendra-ollama — Ollama runtime (MIT, LLM + embeddings server)
   # =====================================================================
   #
-  # OPT-IN via the `ollama` compose profile. Pulls and serves baseline
-  # models. The platform reaches Ollama via the internal hostname
+  # Started by default. Serves the embeddings model (pulled by
+  # ./scripts/up.sh). The platform reaches Ollama via the internal hostname
   # `kvendra-ollama:11434`. Host port 11434 is exposed so Claude Code (or
   # any MCP-native IDE) on the host can hit the same Ollama instance
   # (one model load, two consumers).
   #
-  # Default mode (cloud embeddings via api.kvendra.cloud) does NOT start
-  # this service. Enable it with:
-  #   docker compose --profile ollama up -d
-  #   # or via the helper script:
-  #   ./scripts/up.sh --with-ollama
+  # Skip it when you use your own embeddings provider:
+  #   ./scripts/up.sh --no-ollama
+  #   # or: docker compose up -d --scale kvendra-ollama=0
   kvendra-ollama:
     image: ollama/ollama:0.24.0
     container_name: kvendra-ref-ollama
-    profiles: ["ollama"]
     restart: unless-stopped
     environment:
       OLLAMA_HOST: "0.0.0.0:11434"
