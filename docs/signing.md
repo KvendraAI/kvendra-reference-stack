@@ -40,7 +40,7 @@ but you really shouldn't.
 ## Manual verification
 
 ```bash
-IMG=docker.io/kvendra/kvendra-platform:0.1.0-alpha.0
+IMG=docker.io/kvendra/kvendra-platform:0.1.0-alpha.2
 
 # 1. Signature
 cosign verify "$IMG" \
@@ -59,7 +59,7 @@ the `KvendraAI` GitHub org. Tighten further if you want to require a
 specific repository / workflow:
 
 ```bash
---certificate-identity 'https://github.com/KvendraAI/kvendra-platform/.github/workflows/release.yml@refs/tags/v0.1.0-alpha.0'
+--certificate-identity 'https://github.com/KvendraAI/kvendra-platform/.github/workflows/release.yml@refs/tags/v0.1.0-alpha.2'
 ```
 
 The `--certificate-oidc-issuer` is GitHub's OIDC issuer. Other valid
@@ -112,7 +112,7 @@ To extract the SBOM for a published image:
 
 ```bash
 cosign download attestation \
-  docker.io/kvendra/kvendra-platform:0.1.0-alpha.0 \
+  docker.io/kvendra/kvendra-platform:0.1.0-alpha.2 \
   | jq -r '.payload' | base64 -d | jq '.predicate' > sbom.spdx.json
 ```
 
